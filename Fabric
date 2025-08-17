@@ -1,0 +1,846 @@
+import { useEffect, useRef, useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
+import { FiSave } from 'react-icons/fi'
+import { IoIosAdd } from 'react-icons/io'
+import { fabric } from 'fabric'
+import Settings from './Settings'
+import { Modal } from 'react-bootstrap'
+import MultiServices from '../../api/MultiServices'
+import apiClient from '../../api/apiService'
+import useAuth from '../../context/AuthContext'
+
+
+const Fabric = () => {
+  const canvasRef = useRef(null)
+  const borderRef = useRef(null)
+  const sliderRef = useRef(0)
+  const [canvas, setCanvas] = useState(null)
+  const [strokeWidth, setStrokeWidth] = useState(2)
+  const [fillColor, setFillColor] = useState('#0000ff')
+  const [defBorder, setDefBorder] = useState(0)
+  const id = `shape_${Date.now()}`
+
+
+  const [searchParams] = useSearchParams()
+
+  const [show, setShow] = useState(false)
+  const [errors, setErrors] = useState({})
+  const [keyword, setKeyword] = useState([])
+  const [source, setSource] = useState(null);
+
+  const { user } = useAuth();
+
+  const handleClose = () => {
+    setShow(false);
+    setSource(null);
+  }
+  const handleSave = () => {
+    if (canvas.getObjects().length === 0) {
+      alert('The canvas is empty')
+    } else {
+      setShow(true)
+      setSource('canvas')
+      console.log(canvas.toJSON());
+      }
+  }
+
+  const handleKeyword = () => {
+    const keywordObj = document.getElementById('keyword')
+    const val = keywordObj.value
+
+    if (val.trim().split(' ').length > 1) {
+      setErrors((prev) => ({ ...prev, keyword: 'Please enter only one word' }))
+      return
+    } else if (!keyword.includes(val.toLowerCase()) && val !== '') {
+      setKeyword((prev) => [...prev, val.toLowerCase()])
+      setErrors((prev) => {
+        const { keyword, ...rest } = prev
+        return rest
+      })
+    }
+
+    keywordObj.value = ''
+  }
+
+  const handleRemoveKeyword = (index) => {
+    setKeyword((prev) => prev.filter((keyword, i) => i !== index))
+  }
+
+  const submitMetaData = async (e) => {
+    e.preventDefault();
+
+    const errors = {};
+    let isValid = true;
+
+    const name = document.getElementById('name').value.trim();
+    const description = document.getElementById('description').value.trim();
+    const visibility = document.getElementById('visibility').value === 'on' ? 'private' : 'public';
+
+    if (name === '') {
+      errors.name = 'Name is required';
+      isValid = false;
+    }
+
+    if (keyword.length === 0) {
+      errors.keyword = 'At least one keyword is required';
+      isValid = false;
+    }
+
+    setErrors(errors);
+
+    const json = canvas.toJSON();
+
+    const dataURL = canvas.toDataURL({
+      format: 'png',
+      quality: 1.0,
+    });
+
+    function dataURLToFile(data, filename) {
+      const arr = data.split(',');
+      const mime = arr[0].match(/:(.*?);/)[1];
+      const bstr = atob(arr[1]);
+      let n = bstr.length;
+      const u8arr = new Uint8Array(n);
+
+      while (n--) {
+        u8arr[n] = bstr.charCodeAt(n);
+      }
+
+      return new File([u8arr], filename, { type: mime });
+    }
+    console.log(dataURLToFile(dataURL, `${name}.png`))
+    // console.log(json);
+
+    if (isValid) {
+      const data = {
+        name: name,
+        description: description,
+        keyword: keyword,
+        rawImage: json,
+        visibility: visibility,
+        source: source,
+        user: user.id,
+        imageFile: dataURLToFile(dataURL, `${name}.png`),
+      };
+
+      apiClient
+        .post('/school/canvas', data)
+        .then((response) => {
+          const status = response.status;
+          if (status === 200) {
+            alert('Canvas state saved!');
+          }
+        })
+        .catch((error) => {
+          console.error('Error saving canvas image:', error);
+        });
+    } else {
+      console.log(errors);
+    }
+  }
+
+  useEffect(() => {
+    if (searchParams.get('updateId')) {
+      async function fetchImage() {
+        const response = await MultiServices.getCanvas(searchParams.get('updateId'))
+        console.log(response[0])
+  
+        if (response) {
+          const canvasState = JSON.parse(JSON.stringify(response[0].canvasImage))
+          console.log('Loading canvas state:', canvasState) // Log the JSON to verify its structure
+          canvas.loadFromJSON(canvasState, canvas.renderAll.bind(canvas), (error) => {
+            if (error) {
+              console.error('Error loading canvas state:', error)
+            }
+          })
+        } else {
+          alert('No saved state found.')
+        }
+      }
+      fetchImage()
+    }
+  }, [])
+
+  useEffect(() => {
+    const canvasinstance = new fabric.Canvas(canvasRef.current, {
+      width: 1000,
+      height: 600,
+      backgroundColor: '#fff',
+    })
+
+    setCanvas(canvasinstance)
+
+    canvasinstance.on('object:moving', (e) => {
+      const activeObject = e.target
+      const canvasWidth = canvasinstance.width
+      const canvasHeight = canvasinstance.height
+
+      if (activeObject) {
+        // Calculate the bounding rectangle
+        const boundingRect = activeObject.getBoundingRect()
+
+        // Constrain movement within canvas boundaries
+        if (boundingRect.left < 0) {
+          activeObject.left = 0
+        }
+        if (boundingRect.top < 0) {
+          activeObject.top = 0
+        }
+        if (boundingRect.left + boundingRect.width > canvasWidth) {
+          activeObject.left = canvasWidth - boundingRect.width
+        }
+        if (boundingRect.top + boundingRect.height > canvasHeight) {
+          activeObject.top = canvasHeight - boundingRect.height
+        }
+
+        // Update the position
+        activeObject.setCoords() // Important to set coordinates after manual adjustment
+      }
+    })
+
+    canvasinstance.on('selection:created', (event) => {
+      console.log('selection:created')
+      console.log('selected:' + event.selected[0].type)
+      console.log('stroke-width:' + event.selected[0].strokeWidth)
+      setDefBorder(event.selected[0].strokeWidth)
+      //handleBorder(event.selected[0])
+      sliderRef.current.value = event.selected[0].strokeWidth
+    })
+    canvasinstance.on('selection:updated', (event) => {
+      console.log('selection:update')
+      console.log('selected:' + event.selected[0].type)
+      console.log('stroke-width:' + event.selected[0].strokeWidth)
+      setDefBorder(event.selected[0].strokeWidth)
+      sliderRef.current.value = event.selected[0].strokeWidth
+      //handleBorder(event.selected[0])
+    })
+
+    //
+    let copiedObject = null;
+
+  // ===============================
+  // 🔹 Handle Keyboard Copy / Paste
+  // ===============================
+  const handleKeyDown = (e) => {
+    const activeObject = canvasinstance.getActiveObject();
+
+    // Arrow keys for moving objects
+    if (activeObject) {
+      let step = e.shiftKey ? 10 : 2; // Hold Shift for moving faster
+
+      switch (e.key) {
+        case "ArrowLeft":
+          activeObject.left -= step;
+          activeObject.setCoords();
+          canvasinstance.renderAll();
+          e.preventDefault();
+          break;
+        case "ArrowRight":
+          activeObject.left += step;
+          activeObject.setCoords();
+          canvasinstance.renderAll();
+          e.preventDefault();
+          break;
+        case "ArrowUp":
+          activeObject.top -= step;
+          activeObject.setCoords();
+          canvasinstance.renderAll();
+          e.preventDefault();
+          break;
+        case "ArrowDown":
+          activeObject.top += step;
+          activeObject.setCoords();
+          canvasinstance.renderAll();
+          e.preventDefault();
+          break;
+        default:
+          break;
+      }
+    }
+
+    // Copy object
+    if (e.ctrlKey && e.key === "c" && activeObject) {
+      activeObject.clone((cloned) => {
+        copiedObject = cloned;
+      });
+      e.preventDefault();
+    }
+
+    // Paste object
+    if (e.ctrlKey && e.key === "v" && copiedObject) {
+      copiedObject.clone((clonedObj) => {
+        canvasinstance.discardActiveObject();
+        clonedObj.set({
+          left: (clonedObj.left || 0) + 20,
+          top: (clonedObj.top || 0) + 20,
+          evented: true,
+        });
+
+        if (clonedObj.type === "activeSelection") {
+          clonedObj.canvas = canvasinstance;
+          clonedObj.forEachObject((obj) => canvasinstance.add(obj));
+          clonedObj.setCoords();
+        } else {
+          canvasinstance.add(clonedObj);
+        }
+
+        copiedObject.top += 20;
+        copiedObject.left += 20;
+
+        canvasinstance.setActiveObject(clonedObj);
+        canvasinstance.requestRenderAll();
+      });
+      e.preventDefault();
+    }
+
+    // Delete object
+    if (e.key === "Delete" && activeObject) {
+      canvasinstance.remove(activeObject);
+      canvasinstance.discardActiveObject(); // Clear selection
+      canvasinstance.renderAll(); // Re-render canvas to apply changes
+      e.preventDefault();
+    }
+  };
+
+
+  const handlePaste = (e) => {
+    const items = e.clipboardData.items;
+
+    for (let i = 0; i < items.length; i++) {
+      const item = items[i];
+
+      // Image pasted
+      if (item.type.indexOf("image") !== -1) {
+        const file = item.getAsFile();
+        const reader = new FileReader();
+
+        reader.onload = (event) => {
+          fabric.Image.fromURL(event.target.result, (img) => {
+            img.set({
+              left: 100,
+              top: 100,
+              selectable: true,
+            });
+            canvasinstance.add(img);
+            canvasinstance.renderAll();
+          });
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // Text pasted
+      if (item.type === "text/plain") {
+        item.getAsString((text) => {
+          const textbox = new fabric.Textbox(text, {
+            left: 100,
+            top: 100,
+            fontSize: 20,
+            fill: "black",
+          });
+          canvasinstance.add(textbox);
+          canvasinstance.renderAll();
+        });
+      }
+    }
+  };
+
+
+  const handleDragOver = (e) => {
+    e.preventDefault(); // Allow drop
+  };
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    const files = e.dataTransfer.files;
+
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+
+      // If dropped file is an image
+      if (file.type.startsWith("image/")) {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          fabric.Image.fromURL(event.target.result, (img) => {
+            img.set({
+              left: e.offsetX || 100,
+              top: e.offsetY || 100,
+              selectable: true,
+            });
+            canvasinstance.add(img);
+            canvasinstance.renderAll();
+          });
+        };
+        reader.readAsDataURL(file);
+      }
+
+      // If dropped file is text
+      if (file.type === "text/plain") {
+        const reader = new FileReader();
+        reader.onload = (event) => {
+          const textbox = new fabric.Textbox(event.target.result, {
+            left: e.offsetX || 100,
+            top: e.offsetY || 100,
+            fontSize: 20,
+            fill: "black",
+          });
+          canvasinstance.add(textbox);
+          canvasinstance.renderAll();
+        };
+        reader.readAsText(file);
+      }
+    }
+  };
+
+    //
+
+  window.addEventListener("keydown", handleKeyDown);
+  window.addEventListener("paste", handlePaste);
+
+  const canvasEl = canvasinstance.upperCanvasEl;
+  canvasEl.addEventListener("dragover", handleDragOver);
+  canvasEl.addEventListener("drop", handleDrop);
+
+    return () => {      
+      window.removeEventListener("keydown", handleKeyDown);
+    window.removeEventListener("paste", handlePaste);
+
+    canvasEl.removeEventListener("dragover", handleDragOver);
+    canvasEl.removeEventListener("drop", handleDrop);
+      canvasinstance.dispose()
+    }
+  }, [])
+
+  
+
+  // Function to add a shape to the canvas
+  const addShape = (type) => {
+    let shape
+    switch (type) {
+      case 'circle':
+        shape = new fabric.Circle({
+          radius: 50,
+          fill: '#0000ff',
+          stroke: 'black',
+          left: 100,
+          top: 100,
+          strokeUniform: true,
+          id,
+        })
+        break
+      case 'triangle':
+        shape = new fabric.Triangle({
+          width: 100,
+          height: 100,
+          fill: '#0000ff',
+          stroke: 'black',
+          left: 100,
+          top: 100,
+          strokeUniform: true,
+          id,
+        })
+        break
+      case 'square':
+        shape = new fabric.Rect({
+          width: 100,
+          height: 100,
+          fill: '#ee3d11',
+          strokeWidth: 4,
+          stroke: 'black',
+          left: 100,
+          top: 100,
+          strokeUniform: true,
+          id,
+        })
+        break
+      case 'text':
+        shape = new fabric.Textbox('Add-text', {
+          left: 100,
+          top: 100,
+          fontSize: 15,
+          fill: 'black',
+          id,
+        })
+        break
+      case 'cylinder':
+        shape = new fabric.Path(
+          'M 0,15 a 30,15 0,0,0 60 0 a 30,15 0,0,0 -60 0 l 0,70.71067811865476 a 30,15 0,0,0 60 0 l 0,-70.71067811865476', // Back to starting point
+          {
+            left: 120,
+            top: 120,
+            fill: 'transparent', // No fill
+            stroke: 'black', // Stroke color
+            strokeWidth: 1, // Stroke width
+            strokeUniform: true,
+            id,
+            //selectable: false,
+          },
+        )
+        break
+      case 'diamond':
+        const diamondPath = 'M1.08569 75L78.5 1.03729L155.914 75L78.5 148.963L1.08569 75Z'
+        shape = new fabric.Path(diamondPath, {
+          fill: 'transparent',
+          stroke: 'black',
+          strokeWidth: 1,
+          strokeUniform: true,
+          left: 100,
+          top: 100,
+          id,
+        })
+        break
+      case 'parallelogram':
+        shape = new fabric.Path('M0.894785 107.25L19.7909 0.75H202.105L183.209 107.25H0.894785Z', {
+          fill: 'transparent',
+          stroke: 'black',
+          strokeWidth: 1,
+          left: 100,
+          top: 100,
+          strokeUniform: true,
+          id,
+        })
+        break
+      case 'rightTriangle':
+        shape = new fabric.Path('M0.751172 136.25L0.961654 1.49766L180.749 136.25H0.751172Z', {
+          fill: 'transparent',
+          stroke: 'black',
+          strokeWidth: 1,
+          left: 100,
+          top: 100,
+          strokeUniform: true,
+          id,
+        })
+        break
+      case 'trapezoid':
+        shape = new fabric.Path('M1.02663 93.25L30.5479 0.75H134.452L163.973 93.25H1.02663Z', {
+          fill: 'transparent',
+          stroke: 'black',
+          strokeWidth: 1,
+          left: 100,
+          top: 100,
+          strokeUniform: true,
+          id,
+        })
+        break
+      case 'arrow':
+        const arrowPath =
+          'M181.071 6.53033C181.363 6.23744 181.363 5.76256 181.071 5.46967L176.298 0.696699C176.005 0.403806 175.53 0.403806 175.237 0.696699C174.944 0.989592 174.944 1.46447 175.237 1.75736L179.48 6L175.237 10.2426C174.944 10.5355 174.944 11.0104 175.237 11.3033C175.53 11.5962 176.005 11.5962 176.298 11.3033L181.071 6.53033ZM0.459717 6.75L180.54 6.75V5.25L0.459717 5.25L0.459717 6.75Z'
+        shape = new fabric.Path(arrowPath, {
+          fill: 'none',
+          stroke: 'black',
+          strokeWidth: 0,
+          left: 100,
+          top: 100,
+          strokeUniform: true,
+          id,
+        })
+        break
+      default:
+        return
+    }
+    canvas.add(shape)
+  }
+
+  // Function to handle stroke width changes
+  const handleStrokeChange = (e) => {
+    const newStrokeWidth = parseInt(e.target.value, 10)
+    setStrokeWidth(newStrokeWidth)
+
+    // Update stroke width for the selected object
+    const activeObject = canvas.getActiveObject()
+    if (activeObject) {
+      activeObject.set({ strokeWidth: newStrokeWidth })
+      canvas.renderAll()
+    }
+  }
+  const handleFileUpload = (event) => {
+    if (!canvas) return
+    const file = event.target.files[0]
+    if (!file) return
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      const dataUrl = e.target.result
+      fabric.Image.fromURL(dataUrl, (img) => {
+        img.set({
+          left: 100,
+          top: 100,
+          selectable: true,
+        })
+        canvas.add(img)
+        canvas.renderAll()
+      })
+    }
+    reader.readAsDataURL(file)
+  }
+
+  const saveCanvas = () => {
+    if (!canvas) return
+
+    const json = canvas.toJSON()
+    console.log('Saving canvas state:', json)
+    localStorage.setItem('canvasState', JSON.stringify(json))
+  }
+
+  const loadCanvas = () => {
+    const savedCanvasState = localStorage.getItem('canvasState')
+    if (savedCanvasState) {
+      const canvasState = JSON.parse(savedCanvasState)
+      console.log('Loading canvas state:', canvasState) // Log the JSON to verify its structure
+      if (canvas) {
+        canvas.loadFromJSON(canvasState, canvas.renderAll.bind(canvas), (error) => {
+          if (error) {
+            console.error('Error loading canvas state:', error)
+          }
+        })
+      }
+    } else {
+      alert('No saved state found.')
+    }
+  }
+  const deleteSelectedShape = () => {
+    if (canvas) {
+      const activeObject = canvas.getActiveObject()
+      if (activeObject) {
+        canvas.remove(activeObject)
+        canvas.discardActiveObject() // Optional: Clear selection
+        canvas.renderAll() // Optional: Re-render canvas to apply changes
+      } else {
+        //alert('No shape selected!');
+      }
+    }
+  }
+  const deleteSelectedShapeByKey = (e) => {
+    console.log (e.key, 'Delete', canvas);
+    if (canvas) {
+      if (e.key === 'Delete') {
+        console.log(e.key)
+        const activeObject = canvas.getActiveObject()
+        if (activeObject) {
+          // canvas.remove(activeObject);
+          // canvas.discardActiveObject(); // Optional: Clear selection
+          // canvas.renderAll(); // Optional: Re-render canvas to apply changes
+        } else {
+          // alert('No shape selected!');
+        }
+      }
+    } else {
+      //alert('No shape selected!');
+    }
+  }
+
+  const bringToFront = () => {
+    const activeObject = canvas.getActiveObject()
+    if (activeObject) {
+      //   canvas.bringToFront(activeObject);
+      canvas.bringForward(activeObject)
+      canvas.renderAll()
+    }
+  }
+
+  const sendToBack = () => {
+    const activeObject = canvas.getActiveObject()
+    if (activeObject) {
+      //   canvas.sendToBack(activeObject);
+      canvas.sendBackwards(activeObject)
+      canvas.renderAll()
+    }
+  }
+
+  const toggleFill = () => {
+    const activeObject = canvas.getActiveObject()
+    if (activeObject) {
+      if (activeObject.fill) {
+        activeObject.set({ fill: null })
+      } else {
+        activeObject.set({ fill: fillColor })
+      }
+      canvas.renderAll()
+    } else {
+      alert('No shape selected!')
+    }
+  }
+
+  const handleBorderChange = (e) => {
+    console.log('borderchange')
+    borderRef.current.innerText = e.target.value
+    console.log(e)
+    if (canvas && canvas.getActiveObject()) {
+      const activeObject = canvas.getActiveObject()
+      console.log(activeObject.type)
+      activeObject.set({ strokeWidth: parseInt(e.target.value, 10) })
+      activeObject.setCoords()
+      activeObject.set({
+        borderColor: '#b2ccff',
+        cornerColor: '#b2ccff',
+        cornerSize: 12,
+      })
+      canvas.renderAll()
+    }
+  }
+
+  const handleBorder = (object) => {
+    console.log('handleborder')
+    console.log(canvas)
+
+    if (canvas) {
+      console.log(object)
+
+      const activeObject = canvas.getActiveObject()
+      console.log(activeObject.type)
+    }
+  }
+
+  const handleResizeCanvas = (newWidth, newHeight) => {
+    if (canvas) {
+      const scaleX = newWidth / canvas.width
+      const scaleY = newHeight / canvas.height
+
+      canvas.setWidth(newWidth)
+      canvas.setHeight(newHeight)
+
+      // Scale all objects to maintain their relative sizes
+      canvas.getObjects().forEach((object) => {
+        object.set({
+          left: object.left * scaleX,
+          top: object.top * scaleY,
+          scaleX: object.scaleX * scaleX,
+          scaleY: object.scaleY * scaleY,
+        })
+      })
+
+      canvas.renderAll() // Re-render the canvas after resizing and repositioning objects
+    }
+  }
+
+  return (
+    <div className="mx-auto">
+      <div>
+        <button className="btn" onClick={() => addShape('square')}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M14 1a1 1 0 0 1 1 1v12a1 1 0 0 1-1 1H2a1 1 0 0 1-1-1V2a1 1 0 0 1 1-1zM2 0a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V2a2 2 0 0 0-2-2z" />
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('circle')}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14m0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16" />
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('triangle')}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M7.938 2.016A.13.13 0 0 1 8.002 2a.13.13 0 0 1 .063.016.15.15 0 0 1 .054.057l6.857 11.667c.036.06.035.124.002.183a.2.2 0 0 1-.054.06.1.1 0 0 1-.066.017H1.146a.1.1 0 0 1-.066-.017.2.2 0 0 1-.054-.06.18.18 0 0 1 .002-.183L7.884 2.073a.15.15 0 0 1 .054-.057m1.044-.45a1.13 1.13 0 0 0-1.96 0L.165 13.233c-.457.778.091 1.767.98 1.767h13.713c.889 0 1.438-.99.98-1.767z" />
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('rightTriangle')}>
+          <svg fill="#000000" width="20px" height="20px" viewBox="0 0 24 24" id="triangle-ruler-pencil" data-name="Line Color" className="icon line-color">
+            <path id="secondary" d="M14.69,3.29l-1.4,1.4a1,1,0,0,0,0"></path>
+            <polygon id="primary" points="19 21 3 21 3 5 19 21" style={{ fill: 'none', stroke: 'rgb(0, 0, 0)', strokeWidth: '1' }}></polygon>
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('parallelogram')}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="20px" height="20px" viewBox="0 0 203 108" fill="none">
+            <path d="M0.894785 107.25L19.7909 0.75H202.105L183.209 107.25H0.894785Z" style={{ fill: 'none', stroke: 'rgb(0, 0, 0)', strokeWidth: '8px' }} />
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('cylinder')}>
+          <svg width="20px" height="20px" viewBox="0 0 21 21" xmlns="http://www.w3.org/2000/svg">
+            <g fill="none" fillRule="evenodd" stroke="currentColor" strokeLinecap="round" strokeLinejoin="round" transform="translate(5 2)">
+              <path d="m.5 3.35294118c0-1.29949353 2-2.85294118 5-2.85294118s5 1.55344765 5 2.85294118v10.29411762c0 1.2994936-2 2.8529412-5 2.8529412s-5-1.5534476-5-2.8529412c0-.6412831 0-9.65283447 0-10.29411762z" />
+              <path d="m.5 3.5c0 1.38071187 2 3 5 3s5-1.61928813 5-3" />
+            </g>
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('diamond')}>
+          <svg fill="#000000" width="20px" height="20px" viewBox="0 0 32 32" version="1.1">
+            <path d="M30.531 15.47l-14.001-14c-0.136-0.136-0.323-0.22-0.53-0.22s-0.395 0.084-0.53 0.22l-14 14c-0.136 0.136-0.22 0.323-0.22 0.53s0.084 0.395 0.22 0.53l14 14.001c0.136 0.135 0.323 0.219 0.53 0.219s0.394-0.084 0.53-0.219l14.001-14.001c0.135-0.136 0.218-0.323 0.218-0.53s-0.083-0.394-0.218-0.53l0 0zM16 28.939l-12.939-12.939 12.939-12.939 12.939 12.939z"></path>
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('trapezoid')}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="45" height="20" viewBox="0 0 165 94" fill="none">
+            <path d="M1.02663 93.25L30.5479 0.75H134.452L163.973 93.25H1.02663Z" style={{ fill: 'none', stroke: 'rgb(0, 0, 0)', strokeWidth: '4px' }}></path>
+          </svg>
+        </button>
+        <button className="btn" onClick={() => addShape('arrow')}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="45" height="20" viewBox="0 0 165 94" fill="none">
+            <path d="M181.071 6.53033C181.363 6.23744 181.363 5.76256 181.071 5.46967L176.298 0.696699C176.005 0.403806 175.53 0.403806 175.237 0.696699C174.944 0.989592 174.944 1.46447 175.237 1.75736L179.48 6L175.237 10.2426C174.944 10.5355 174.944 11.0104 175.237 11.3033C175.53 11.5962 176.005 11.5962 176.298 11.3033L181.071 6.53033ZM0.459717 6.75L180.54 6.75V5.25L0.459717 5.25L0.459717 6.75Z" style={{ fill: 'none', stroke: 'rgb(0, 0, 0)', strokeWidth: '4px' }}></path>
+          </svg>
+        </button>
+
+        <button onClick={() => addShape('text')}>Text</button>
+        <input type="file" className="btn" accept="image/*" onChange={handleFileUpload} />
+        <button onClick={saveCanvas}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-floppy" viewBox="0 0 16 16">
+            <path d="M11 2H9v3h2z" />
+            <path d="M1.5 0h11.586a1.5 1.5 0 0 1 1.06.44l1.415 1.414A1.5 1.5 0 0 1 16 2.914V14.5a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 0 14.5v-13A1.5 1.5 0 0 1 1.5 0M1 1.5v13a.5.5 0 0 0 .5.5H2v-4.5A1.5 1.5 0 0 1 3.5 9h9a1.5 1.5 0 0 1 1.5 1.5V15h.5a.5.5 0 0 0 .5-.5V2.914a.5.5 0 0 0-.146-.353l-1.415-1.415A.5.5 0 0 0 13.086 1H13v4.5A1.5 1.5 0 0 1 11.5 7h-7A1.5 1.5 0 0 1 3 5.5V1H1.5a.5.5 0 0 0-.5.5m3 4a.5.5 0 0 0 .5.5h7a.5.5 0 0 0 .5-.5V1H4zM3 15h10v-4.5a.5.5 0 0 0-.5-.5h-9a.5.5 0 0 0-.5.5z" />
+          </svg>
+        </button>
+        <button onClick={loadCanvas}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" className="bi bi-download" viewBox="0 0 16 16">
+            <path d="M.5 9.9a.5.5 0 0 1 .5.5v2.5a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-2.5a.5.5 0 0 1 1 0v2.5a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2v-2.5a.5.5 0 0 1 .5-.5" />
+            <path d="M7.646 11.854a.5.5 0 0 0 .708 0l3-3a.5.5 0 0 0-.708-.708L8.5 10.293V1.5a.5.5 0 0 0-1 0v8.793L5.354 8.146a.5.5 0 1 0-.708.708z" />
+          </svg>
+        </button>
+        <button className="btn" onClick={deleteSelectedShape}>
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" viewBox="0 0 16 16">
+            <path d="M6.5 1h3a.5.5 0 0 1 .5.5v1H6v-1a.5.5 0 0 1 .5-.5M11 2.5v-1A1.5 1.5 0 0 0 9.5 0h-3A1.5 1.5 0 0 0 5 1.5v1H1.5a.5.5 0 0 0 0 1h.538l.853 10.66A2 2 0 0 0 4.885 16h6.23a2 2 0 0 0 1.994-1.84l.853-10.66h.538a.5.5 0 0 0 0-1zm1.958 1-.846 10.58a1 1 0 0 1-.997.92h-6.23a1 1 0 0 1-.997-.92L3.042 3.5zm-7.487 1a.5.5 0 0 1 .528.47l.5 8.5a.5.5 0 0 1-.998.06L5 5.03a.5.5 0 0 1 .47-.53Zm5.058 0a.5.5 0 0 1 .47.53l-.5 8.5a.5.5 0 1 1-.998-.06l.5-8.5a.5.5 0 0 1 .528-.47M8 4.5a.5.5 0 0 1 .5.5v8.5a.5.5 0 0 1-1 0V5a.5.5 0 0 1 .5-.5" />
+          </svg>
+        </button>
+        <button onClick={bringToFront}>Bring to Front</button>
+        <button onClick={sendToBack}>Send to Back</button>
+        <button onClick={toggleFill}>Toggle Fill</button>
+        <button onClick={() => handleResizeCanvas(800, 480)}>Resize Canvas</button>
+        <input type="range" name="border" min="0" max="10" step="1" ref={sliderRef} defaultValue={defBorder} onChange={handleBorderChange} />
+        <span ref={borderRef}>{defBorder}</span>
+      </div>
+      <canvas id="canvas" ref={canvasRef} />
+      <Settings canvas={canvas} />
+      <button type="button" className="btn btn-primary my-4" onClick={handleSave}>
+        <FiSave /> Save
+      </button>
+      <Modal show={show} onHide={handleClose} onExited={() => setErrors({})}>
+        <Modal.Header closeButton>
+          <div className="modal-title h5">Canvas Details</div>
+        </Modal.Header>
+        <form action="" id="metaDataForm" method="post" autoComplete="off" onSubmit={submitMetaData}>
+          <Modal.Body>
+            <div className="mb-3">
+              <input type="text" className="form-control" id="name" name="name" placeholder="Name" />
+              {errors && <span className="error">{errors.name}</span>}
+            </div>
+            <div className="input-group mb-3">
+              <input type="text" className="form-control" id="keyword" name="keyword" />
+              <button type="button" className="btn btn-light border" onClick={handleKeyword}>
+                <IoIosAdd /> Keywords
+              </button>
+            </div>
+            {errors && <span className="error">{errors.keyword}</span>}
+            <div id="keyword-badges">
+              {keyword.map((keyword, index) => (
+                <div key={index} className="badge custom-purple-badge">
+                  <span className="me-2"> {keyword}</span>
+                  <span className="badge-remove pointer" onClick={() => handleRemoveKeyword(index)}>
+                    &times;
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mb-3">
+              <textarea className="form-control" id="description" name="description" placeholder="Description (If have any)"></textarea>
+            </div>
+            <div class="form-check form-switch">
+              <input className="form-check-input" type="checkbox" role="switch" id="visibility" name="visibility" />
+              <label className="form-check-label" htmlFor="visibility">
+                Private
+              </label>
+            </div>
+          </Modal.Body>
+          <Modal.Footer>
+            <button type="submit" className="btn btn-primary shadow">
+              Submit
+            </button>
+          </Modal.Footer>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+export default Fabric
